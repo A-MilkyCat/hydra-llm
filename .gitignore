@@ -1,0 +1,30 @@
+.env
+.env.*
+*.pem
+pycache/
+*.py[cod]
+*$py.class
+.pytest_cache/
+venv/
+.venv/
+env/
+ENV/
+# OS Generated Files (macOS / Windows)
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+# Logs and Databases
+*.log
+*.sqlite3
+
+cmd.txt
+testquota.py
