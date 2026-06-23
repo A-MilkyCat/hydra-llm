@@ -3,50 +3,52 @@ from fastapi.responses import JSONResponse
 import asyncio
 from collections import defaultdict
 
-# Create a micro FastAPI application for testing purposes
 app = FastAPI(title="Mock Gemini Server")
 
-# In-memory dictionary to track API key usage counts
-# Format: {"AIzaSy_key_A": 5, "AIzaSy_key_B": 8}
-key_usage_tracker = defaultdict(int)
+# Dictionaries to separately track successful usages and failed (rate-limited) attempts
+success_tracker = defaultdict(int)
+failure_tracker = defaultdict(int)
+
+# Define the maximum allowed requests per API key
+MAX_QUOTA = 7
 
 @app.post("/v1beta/models/{model_name}:generateContent")
 async def mock_gemini_endpoint(model_name: str, key: str = Query(None)):
     """
-    A mock endpoint for the Gemini API.
-    It intercepts the request and simulates network latency and rate limits.
+    Intercepts requests to simulate network latency and rate limits.
+    Normal access takes 2 seconds. Exceeding the quota triggers an instant 429.
     """
     if not key:
         return JSONResponse(status_code=401, content={"error": "API key not valid."})
 
-    # 1. Simulate network and AI processing latency
-    # (15.71 seconds / 7 requests = approx 2.24 seconds)
-    await asyncio.sleep(2.24)
-
-    # 2. Increment the usage count for this specific key
-    key_usage_tracker[key] += 1
-    current_usage = key_usage_tracker[key]
-
-    # Log to the server console for observation
-    print(f"[Mock API] Request received | Key: ...{key[-4:]} | Usage count: {current_usage}")
-
-    # 3. Core logic: Rate limit trigger
-    if current_usage <= 4:
-        # First 7 times: Simulate a successful response from Google
+    # Core Logic: Determine behavior based on the current success count
+    if success_tracker[key] < MAX_QUOTA:
+        # 1. Normal Access: Increment success count and simulate AI processing time (2 seconds)
+        success_tracker[key] += 1
+        current_success = success_tracker[key]
+        
+        print(f"[Mock API] ✅ Success | Key: ...{key[-4:]} | Quota Used: {current_success}/{MAX_QUOTA}")
+        
+        await asyncio.sleep(2.0)
         return {
             "candidates": [
                 {
                     "content": {
                         "parts": [
-                            {"text": f"This is a fake response from the Mock server. Key ending in: {key[-4:]}"}
+                            {"text": f"Fake response from Mock Server. Key ending in: {key[-4:]}"}
                         ]
                     }
                 }
             ]
         }
     else:
-        # Trigger 429 Too Many Requests
-        print(f"[Mock API] Key ...{key[-4:]} quota exceeded. Returning 429!")
+        # 2. Rate Limit Triggered: Increment failure count and return 429 instantly
+        failure_tracker[key] += 1
+        current_failures = failure_tracker[key]
+        
+        # Display the specific number of invalid access attempts as requested
+        print(f"[Mock API] ⚠️ Rate Limited (429) | Key: ...{key[-4:]} | Invalid access count: {current_failures}")
+        
         return JSONResponse(
             status_code=429,
             content={

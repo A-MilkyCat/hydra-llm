@@ -1,17 +1,20 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
-from core.balancer import KeyBalancer
+import logging
+
+from core.protocols import KeyManager
+# from core.redis_manager import get_key_manager
+from core.memory_manager import get_memory_manager as get_key_manager
 from services.llm_service import generate_text_with_fallback
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Hydra-LLM API Gateway",
-    description="BYOK (Bring Your Own Key) Gateway with Per-User Round-Robin",
+    description="Enterprise-grade BYOK Gateway featuring strictly decoupled Dependency Injection.",
     version="1.0.0"
 )
-
-# In-memory storage mapping user_id to their specific KeyBalancer
-# Note: In a production environment with multiple workers, this should be replaced by Redis.
-user_balancers: dict[str, KeyBalancer] = {}
 
 class ChatRequest(BaseModel):
     user_id: str = Field(..., description="Unique identifier for the user making the request")
@@ -19,32 +22,33 @@ class ChatRequest(BaseModel):
     prompt: str = Field(..., description="The prompt to send to the LLM")
 
 @app.post("/v1/chat")
-async def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(
+    request: ChatRequest,
+    key_manager: KeyManager = Depends(get_key_manager)  # <-- FASTAPI NATIVE DI
+):
     """
-    Receives user-specific keys and a prompt, then routes it through the load-balanced LLM service.
+    Gateway entrypoint. Resolves the KeyManager dependency automatically via FastAPI,
+    enforces rate limits, and routes the validated request to the service layer.
     """
-    user_id = request.user_id
-    user_keys = request.api_keys
-
-    # Check if the user is new, or if they have updated their provided key list
-    if user_id not in user_balancers or user_balancers[user_id].keys != user_keys:
-        print(f"[Gateway] Initializing new KeyBalancer for user: {user_id}")
-        user_balancers[user_id] = KeyBalancer(user_keys)
-
-    # Retrieve the user's specific balancer instance
-    balancer = user_balancers[user_id]
-
     try:
-        # Pass the user's prompt and their specific balancer to the service
-        result = await generate_text_with_fallback(request.prompt, balancer)
+        # Enforce rate limit (100 requests per 60 seconds for demonstration)
+        await key_manager.check_rate_limit(request.user_id, limit=100, window_seconds=60)
+
+        # Execute business logic with the injected dependency
+        result = await generate_text_with_fallback(
+            prompt=request.prompt, 
+            user_id=request.user_id, 
+            api_keys=request.api_keys,
+            key_manager=key_manager
+        )
         
         clean_text = result["candidates"][0]["content"]["parts"][0]["text"]
         return {"status": "success", "data": clean_text}
         
     except KeyError:
-        return {"status": "error", "message": "Failed to parse LLM response", "raw_data": result}
+        return {"status": "error", "message": "Failed to parse LLM response"}
     except HTTPException as http_exc:
         raise http_exc
-    # Fallback for unexpected internal errors
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected internal error: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")

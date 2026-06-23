@@ -1,1 +1,1 @@
-fastapi uvicorn httpx python-dotenv pydantic
+fastapi uvicorn httpx python-dotenv pydantic redis
