@@ -25,6 +25,12 @@ Thumbs.db
 # Logs and Databases
 *.log
 *.sqlite3
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
 
 cmd.txt
 testquota.py
+testaws.py
+test.json

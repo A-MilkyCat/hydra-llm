@@ -1,16 +1,24 @@
 import redis.asyncio as redis
 from fastapi import HTTPException
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+# Dynamically read Redis connection details from environment variables
+# Fallback to local 127.0.0.1 for local development
+REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
+REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}"
 
 class RedisManager:
     """
     Concrete implementation of the KeyManager protocol using Redis.
     Provides atomic operations for distributed systems.
     """
-    def __init__(self, redis_url: str = "redis://127.0.0.1:6379"):
-        self.redis = redis.from_url(redis_url, decode_responses=True)
+    def __init__(self):
+        logger.info(f"Connecting to Redis at {REDIS_URL}...")
+        self.redis = redis.from_url(REDIS_URL, decode_responses=True)
 
     async def get_next_key(self, user_id: str, api_keys: list[str]) -> str:
         pool_size = len(api_keys)
@@ -47,7 +55,7 @@ class RedisManager:
 redis_client = RedisManager()
 
 # FastAPI Dependency Provider
-async def get_key_manager() -> RedisManager:
+async def get_redis_manager() -> RedisManager:
     """
     Dependency provider function to be used with FastAPI's Depends().
     This allows easy mocking of the KeyManager during unit testing.

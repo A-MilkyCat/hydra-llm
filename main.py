@@ -1,14 +1,23 @@
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+import os
 import logging
 
 from core.protocols import KeyManager
-# from core.redis_manager import get_key_manager
-from core.memory_manager import get_memory_manager as get_key_manager
 from services.llm_service import generate_text_with_fallback
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+MANAGER_TYPE = os.getenv("MANAGER_TYPE", "redis").lower()
+
+if MANAGER_TYPE == "redis":
+    from core.redis_manager import get_redis_manager as get_key_manager
+    logger.info("[System] Initializing Gateway with RedisManager (Distributed Mode)")
+else:
+    from core.memory_manager import get_memory_manager as get_key_manager
+    logger.info("[System] Initializing Gateway with MemoryManager (Local Mode)")
 
 app = FastAPI(
     title="Hydra-LLM API Gateway",
@@ -20,6 +29,18 @@ class ChatRequest(BaseModel):
     user_id: str = Field(..., description="Unique identifier for the user making the request")
     api_keys: list[str] = Field(..., min_items=1, description="List of Gemini API keys provided by the user")
     prompt: str = Field(..., description="The prompt to send to the LLM")
+
+@app.get("/health", tags=["System"])
+async def health_check():
+    """
+    Liveness probe endpoint for GCP Cloud Run.
+    Cloud Run constantly pings this endpoint to ensure the container is healthy.
+    It must return a 200 OK status within a specific timeframe.
+    """
+    return JSONResponse(
+        status_code=200,
+        content={"status": "alive", "service": "hydra-gateway"}
+    )
 
 @app.post("/v1/chat")
 async def chat_endpoint(

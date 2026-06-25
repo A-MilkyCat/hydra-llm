@@ -2,9 +2,18 @@ import httpx
 import logging
 from fastapi import HTTPException
 from core.protocols import KeyManager
+import os
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+# Dynamically route the API base URL.
+# If not set, it defaults to the REAL Google Gemini API.
+# For testing, you can set this to "http://127.0.0.1:8001" or your Cloud Run Mock URL.
+GEMINI_API_BASE_URL = os.getenv(
+    "GEMINI_API_BASE_URL", 
+    "https://generativelanguage.googleapis.com"
+)
 
 async def generate_text_with_fallback(
     prompt: str, 
@@ -25,7 +34,7 @@ async def generate_text_with_fallback(
             current_key = await key_manager.get_next_key(user_id, api_keys)
             
             MODEL_NAME = "gemini-3-flash-preview"
-            url = f"http://127.0.0.1:8001/v1beta/models/{MODEL_NAME}:generateContent?key={current_key}"
+            url = f"{GEMINI_API_BASE_URL}/v1beta/models/{MODEL_NAME}:generateContent?key={current_key}"
 
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}]
