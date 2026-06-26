@@ -46,7 +46,7 @@ resource "aws_security_group" "hydra_sg" {
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    security_groups = [aws_security_group.alb_sg.id]
   }
 
   ingress {
@@ -62,6 +62,49 @@ resource "aws_security_group" "hydra_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+}
+
+# ElastiCache needs a subnet group
+resource "aws_elasticache_subnet_group" "hydra_redis" {
+  name       = "hydra-redis-subnet-group"
+  subnet_ids = data.aws_subnets.default.ids
+}
+
+# Security group for Redis (only allow ECS to connect)
+resource "aws_security_group" "redis_sg" {
+  name   = "hydra-redis-sg"
+  vpc_id = data.aws_vpc.default.id
+
+  ingress {
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.hydra_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# ElastiCache Redis
+resource "aws_elasticache_cluster" "hydra_redis" {
+  cluster_id           = "hydra-redis"
+  engine               = "redis"
+  node_type            = "cache.t4g.micro"
+  num_cache_nodes      = 1
+  parameter_group_name = "default.redis7"
+  port                 = 6379
+  subnet_group_name    = aws_elasticache_subnet_group.hydra_redis.name
+  security_group_ids   = [aws_security_group.redis_sg.id]
+}
+
+# Output Redis endpoint
+output "redis_endpoint" {
+  value = aws_elasticache_cluster.hydra_redis.cache_nodes[0].address
 }
 
 resource "aws_service_discovery_private_dns_namespace" "hydra" {
@@ -118,8 +161,10 @@ resource "aws_ecs_task_definition" "hydra_task" {
     }]
 
     environment = [
-      { name = "MANAGER_TYPE",        value = "memory" },
+      { name = "MANAGER_TYPE",        value = "redis" },
       { name = "PORT",                value = "8080" },
+      { name = "REDIS_HOST",          value = aws_elasticache_cluster.hydra_redis.cache_nodes[0].address },
+      { name = "REDIS_PORT",          value = "6379" },
       { name = "GEMINI_API_BASE_URL", value = "http://mock.hydra.local:8001" }
     ]
 
@@ -167,7 +212,7 @@ resource "aws_ecs_service" "hydra_service" {
   name            = "hydra-gateway-service"
   cluster         = aws_ecs_cluster.hydra_cluster.id
   task_definition = aws_ecs_task_definition.hydra_task.arn
-  desired_count   = 1
+  desired_count   = 2
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -175,6 +220,14 @@ resource "aws_ecs_service" "hydra_service" {
     security_groups  = [aws_security_group.hydra_sg.id]
     assign_public_ip = true
   }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.hydra_tg.arn
+    container_name   = "hydra-gateway"
+    container_port   = 8080
+  }
+
+  depends_on = [aws_lb_listener.hydra_listener]
 }
 
 resource "aws_ecs_service" "mock_service" {
@@ -193,4 +246,67 @@ resource "aws_ecs_service" "mock_service" {
   service_registries {
     registry_arn = aws_service_discovery_service.mock.arn
   }
+}
+
+# ALB
+resource "aws_lb" "hydra_alb" {
+  name               = "hydra-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = data.aws_subnets.default.ids
+}
+
+# ALB Security Group
+resource "aws_security_group" "alb_sg" {
+  name   = "hydra-alb-sg"
+  vpc_id = data.aws_vpc.default.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Target Group
+resource "aws_lb_target_group" "hydra_tg" {
+  name        = "hydra-gateway-tg"
+  port        = 8080
+  protocol    = "HTTP"
+  vpc_id      = data.aws_vpc.default.id
+  target_type = "ip"
+
+  health_check {
+    path                = "/health"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+}
+
+# Listener
+resource "aws_lb_listener" "hydra_listener" {
+  load_balancer_arn = aws_lb.hydra_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.hydra_tg.arn
+  }
+}
+
+# Output ALB DNS
+output "alb_dns" {
+  value = "http://${aws_lb.hydra_alb.dns_name}"
 }
