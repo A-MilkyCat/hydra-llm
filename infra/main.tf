@@ -165,7 +165,12 @@ resource "aws_ecs_task_definition" "hydra_task" {
       { name = "PORT",                value = "8080" },
       { name = "REDIS_HOST",          value = aws_elasticache_cluster.hydra_redis.cache_nodes[0].address },
       { name = "REDIS_PORT",          value = "6379" },
-      { name = "GEMINI_API_BASE_URL", value = "http://mock.hydra.local:8001" }
+      { name = "GEMINI_API_BASE_URL", value = "http://mock.hydra.local:8001" },
+      { name = "DB_HOST",             value = aws_db_instance.hydra_db.endpoint },
+      { name = "DB_NAME",             value = "hydradb" },
+      { name = "DB_USER",             value = "hydra_admin" },
+      { name = "DB_PASSWORD",         value = var.db_password },
+      { name = "JWT_SECRET",          value = var.jwt_secret }
     ]
 
     logConfiguration = {
@@ -309,4 +314,52 @@ resource "aws_lb_listener" "hydra_listener" {
 # Output ALB DNS
 output "alb_dns" {
   value = "http://${aws_lb.hydra_alb.dns_name}"
+}
+
+# RDS
+resource "aws_db_subnet_group" "hydra_db" {
+  name       = "hydra-db-subnet-group"
+  subnet_ids = data.aws_subnets.default.ids
+}
+
+resource "aws_security_group" "db_sg" {
+  name   = "hydra-db-sg"
+  vpc_id = data.aws_vpc.default.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.hydra_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_db_instance" "hydra_db" {
+  identifier        = "hydra-db"
+  engine            = "postgres"
+  engine_version    = "16"
+  instance_class    = "db.t3.micro"
+  allocated_storage = 20
+
+  db_name  = "hydradb"
+  username = "hydra_admin"
+  password = var.db_password
+
+  db_subnet_group_name   = aws_db_subnet_group.hydra_db.name
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+
+  skip_final_snapshot = true
+  publicly_accessible = false
+  storage_encrypted = true
+}
+
+output "db_endpoint" {
+  value = aws_db_instance.hydra_db.endpoint
 }
